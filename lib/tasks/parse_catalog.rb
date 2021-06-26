@@ -2,87 +2,102 @@ require 'nokogiri'
 require 'httparty'
 require 'byebug'
 
-class ParseCatalog
-
-    def self.get_cat2_name (cat2_url)
-        if cat2_url.to_s.include?("catalog_name=")
-            cat2_name = cat2_url.split("catalog_name=").last&.gsub("-", " ") #вытаскиваем Название из URL; & перед gsub чтоб ошибку не выдавало
-        elsif cat2_url.to_s.include?('?PFDID')
-            cat2_name = cat2_url.gsub('?', '').gsub(/PFDID.*/, "").split("/").last.gsub("-", " ")     #
-        elsif cat2_url.to_s.include?('&PFDID1')
-            cat2_name = cat2_url.split('&').first
-        elsif cat2_url.to_s.include?('?page=1') 
-            cat2_name = cat2_url.gsub('?', '').gsub(/page=1.*/, "").split("/").last
-        elsif cat2_url.to_s.include?('/catalog/')
-            cat2_name = cat2_url.split("/").last&.gsub("-", " ")
-        else
-            cat2_name = cat2_url.split("/").last
-        end
-        return cat2_name
-    end
-
-    # Scraping catalogs
-    def self.scrap_catalogs
-        url = "https://www.tohome.com"
-        page = HTTParty.get(url)
-        parsed_page = Nokogiri::HTML(page.body)
-        parsed_list = parsed_page.css("div.showCatBtn") 
-    # Разматываем каталоги
-        cat1_count = parsed_list.xpath("//ul[@id='leftnav']/li/a").count
-        i = 1
-        while i <= cat1_count 
-            cat1 = parsed_list.xpath("//ul[@id='leftnav']/li[#{i}]/a")
-            cat1_url = cat1[0].attributes["href"].value
-            cat1_name = cat1_url.split("catalog_name=")[1]&.gsub("-", " ") #вытаскиваем Название из URL; & перед gsub чтоб ошибку не выдавало
-            catalog1 = {name: cat1_name, url: cat1_url, level: 1, parent_url: nil}
-            puts ''
-            puts catalog1
-            
-            cat_new = Catalog.new(name: "#{cat1_name}", url: "#{cat1_url}", level: "1", parent_url: "https://www.tohome.com")
-            cat_new.save
+# Scraping catalogs. Main function
+def scrap_catalogs
+    url = "https://www.tohome.com"
+    catalog_css_target = "div.showCatBtn"
+    parsed_list = parse_page(url, catalog_css_target)
+    
+# Разматываем каталоги
+    catalogs_1_count = parsed_list.xpath("//ul[@id='leftnav']/li/a").count
+    i = 1 # 1st level catalogs iterator
+    
+    while i <= catalogs_1_count 
+        catalog_1 = parsed_list.xpath("//ul[@id='leftnav']/li[#{i}]/a")
+        catalog_1_url = get_catalog_url(catalog_1)
+        catalog_1_name = get_catalog_name(catalog_1_url)
+        
+        catalog_1_hash = {name: catalog_1_name, url: catalog_1_url, level: 1, parent_url: "https://www.tohome.com"}
+        db_record = Catalog.new(name: "#{catalog_1_name}", url: "#{catalog_1_url}", level: "1", parent_url: "https://www.tohome.com")
+        db_record.save
+        
+        puts ''
+        puts catalog_1_hash
 
     # Разматываем подкаталоги
-            cat2_count = parsed_list.xpath("//ul[@id='leftnav']/li[#{i}]/ul/li/a").count
-            cat2_subj = parsed_list.css("a.subject") # Корректный массив каталогов 2 уровня
-            j = 1
-            while j <= cat2_count 
-            
-                # Catalog URL 
-                begin
-                    cat2 = parsed_list.xpath("//ul[@id='leftnav']/li[#{i}]/ul/li[#{j}]/a")
-                    cat2_url = cat2[0].attributes['href'].value
-                rescue
-                # puts 'i = ' + i.to_s + '; j= ' + j.to_s
-                end
-                # Catalog name
-                cat2_name = ParseCatalog.get_cat2_name(cat2_url)
-
-                # Разделяем каталоги 2 и 3 уровн
-                begin   
-                    if cat2_subj.include?(cat2[0]) 
-                        catalog2 = {name: cat2_name, url: cat2_url, level: 2, parent_url: cat1_url}
-                        #puts '    i = ' + i.to_s + '; j = ' + j.to_s + '    ' + catalog2.to_s
-                        puts '    ' + catalog2.to_s
-
-                        cat_new = Catalog.new(name: "#{cat2_name}", url: "#{cat2_url}", level: "2", parent_url: "#{cat1_url}")
-                        cat_new.save
-                    else
-                        catalog3 = {name: cat2_name, url: cat2_url, level: 3, parent_url: catalog2[:url]}
-                        puts '        ' + catalog3.to_s
-
-                        cat_new = Catalog.new(name: "#{cat2_name}", url: "#{cat2_url}", level: "3", parent_url: "#{catalog2[:url]}")
-                        cat_new.save
-                    end
-                rescue   
-                    #puts '    i = ' + i.to_s + '; j = ' + j.to_s
-                    cat2_count = cat2_count + 1
-                end
-                j = j + 1
+        catalogs_2_lvl_count = parsed_list.xpath("//ul[@id='leftnav']/li[#{i}]/ul/li/a").count
+        catalogs_2_actual = parsed_list.css("a.subject") # Корректный массив каталогов 2 уровня
+        j = 1
+        while j <= catalogs_2_lvl_count 
+        
+            # Geting 1st level catalog's attributies  
+            begin
+                catalog_2 = parsed_list.xpath("//ul[@id='leftnav']/li[#{i}]/ul/li[#{j}]/a") 
+                catalog_2_url = get_catalog_url(catalog_2)
+            rescue
+            # puts 'i = ' + i.to_s + '; j= ' + j.to_s
             end
-            i = i + 1
+            catalog_2_name = get_catalog_name(catalog_2_url)
+
+            # Separating 2nd & 3rd levels catalogs
+            begin   
+                if catalogs_2_actual.include?(catalog_2[0]) 
+                    catalog_2_hash = {name: catalog_2_name, url: catalog_2_url, level: 2, parent_url: catalog_1_url}
+                    #puts '    i = ' + i.to_s + '; j = ' + j.to_s + '    ' + catalog2.to_s
+                    puts '    ' + catalog_2_hash.to_s
+
+                    db_record = Catalog.new(name: "#{catalog_2_name}", url: "#{catalog_2_url}", level: "2", parent_url: "#{catalog_1_url}")
+                    db_record.save
+                else
+                    catalog_3_hash = {name: catalog_2_name, url: catalog_2_url, level: 3, parent_url: catalog_2_hash[:url]}
+                    puts '        ' + catalog_3_hash.to_s
+
+                    db_record = Catalog.new(name: "#{catalog_2_name}", url: "#{catalog_2_url}", level: "3", parent_url: "#{catalog_2_hash[:url]}")
+                    db_record.save
+                end
+            rescue   
+                #puts '    i = ' + i.to_s + '; j = ' + j.to_s
+                # Steps over missed numbers in catalog's list on the website
+                catalogs_2_lvl_count = catalogs_2_lvl_count + 1
+            end
+            j = j + 1
         end
-        puts ''
-        puts 'Total catalogs added: ' + Catalog.all.count.to_s
-        puts 
+        i = i + 1
     end
+    puts ''
+    puts 'Total catalogs added: ' + Catalog.all.count.to_s
+    puts 
+end
+
+
+# Returns parsed list which is in "css_object"
+def parse_page(url, css_target)
+    page = HTTParty.get(url)
+    parsed_page = Nokogiri::HTML(page.body)
+    parsed_list = parsed_page.css(css_target) 
+    return parsed_list
+end
+
+# Extracts url from xptath
+def get_catalog_url(xpath)
+    url = xpath[0].attributes["href"].value
+    return url
+end
+
+# Extracts catalog's name from url
+def get_catalog_name(catalog_url)
+    if catalog_url.to_s.include?("catalog_name=")
+        catalog_name = catalog_url.split("catalog_name=").last&.gsub("-", " ") #вытаскиваем Название из URL; & перед gsub чтоб ошибку не выдавало
+    elsif catalog_url.to_s.include?('?PFDID')
+        catalog_name = catalog_url.gsub('?', '').gsub(/PFDID.*/, "").split("/").last.gsub("-", " ")     #
+    elsif catalog_url.to_s.include?('&PFDID1')
+        catalog_name = catalog_url.split('&').first
+    elsif catalog_url.to_s.include?('?page=1') 
+        catalog_name = catalog_url.gsub('?', '').gsub(/page=1.*/, "").split("/").last
+    elsif catalog_url.to_s.include?('/catalog/')
+        catalog_name = catalog_url.split("/").last&.gsub("-", " ")
+    else
+        catalog_name = catalog_url.split("/").last
+    end
+    return catalog_name
 end

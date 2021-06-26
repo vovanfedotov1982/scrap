@@ -7,14 +7,14 @@ namespace :scrap do
     task :catalogs => :environment do
         ProductCatalog.delete_all 
         Catalog.delete_all
-        ParseCatalog.scrap_catalogs
+        scrap_catalogs
     end
 
     desc "Scraping products in catalog list which is parameter"
     task :products => :environment do
         ProductCatalog.delete_all 
         Product.delete_all
-        ParseProduct.scrap_products(Catalog.all)
+        scrap_products(Catalog.all)
     end
 
     desc "Scraping Caatalogs & Products"
